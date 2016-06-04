@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en" onmousemove="updateMouse(event.clientX-this.offsetLeft, event.clientY-this.offsetTop)">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>rational sound synthesizer</title>
+<script>var RAT_ARRAY_TYPE = Float32Array;</script>
+<script src="https://acerix.github.io/rational.js/releases/rationaljs.alpha.js"></script>
+<script src="js/scale.js"></script>
+<script>
+
+var base_frequency = rat.fromInteger(55); // A
+
+var wave_type = 0;
+
+var selected_scale = Scale_Blues;
+
+var tweak_interval = rat.fromValues(1, 1000);
+
+var sample_rate = 22050; // 2 * 3 * 3 * 5 * 5 * 7 * 7
+
+//var x_modifier = 1 / window.innerWidth * 32;
+var x_modifier = 1 / 50; // 50px bg image
+
+// only 1 track is possible, for now...
+var tracks = [];
+
+// webkit
+var buffer_size = 12;
+var audio_context;
+var jsProcessor;
+var gainNode;
+
+// webkit
+var audioFillEventBuffer = function(event) {
+    var buffer = event.outputBuffer.getChannelData(0);
+    tracks[0].audioFillBuffer(buffer);
+};
+
+// mozilla
+// this is from mozilla.org docs
+function AudioDataDestination(sampleRate, trackObject) {
+  // Initialize the audio output.
+  audio_context = new Audio();
+  audio_context.mozSetup(1, sampleRate);
+
+  var currentWritePosition = 0;
+  //var prebufferSize = Math.ceil(sampleRate/2);
+  var prebufferSize = Math.pow(2, buffer_size);
+  var tail = null, tailPosition;
+
+  // The function called with regular interval to populate
+  // the audio output buffer.
+  setInterval(function() {
+    var written;
+    // Check if some data was not written in previous attempts.
+    if(tail) {
+      written = audio_context.mozWriteAudio(tail.subarray(tailPosition));
+      currentWritePosition += written;
+      tailPosition += written;
+      if(tailPosition < tail.length) {
+        // Not all the data was written, saving the tail...
+        return; // ... and exit the function.
+      }
+      tail = null;
+    }
+
+    // Check if we need add some data to the audio output.
+    var currentPosition = audio_context.mozCurrentSampleOffset();
+    var available = currentPosition + prebufferSize - currentWritePosition;
+    if(available > 0) {
+      // Request some sound data from the callback function.
+      var soundData = new Float32Array(available);
+      trackObject.audioFillBuffer(soundData);
+
+      // Write the data.
+      written = audio_context.mozWriteAudio(soundData);
+      if(written < soundData.length) {
+        // Not all the data was written, saving the tail.
+        tail = soundData;
+        tailPosition = written;
+      }
+      currentWritePosition += written;
+    }
+  }, 0);
+}
+
+function init() {
+    document.oncontextmenu = function() {return false;};
+    tracks.push( new AudioTrack_SineWave( sample_rate, base_frequency ) );
+    try_webkit_audio();
+
+    // the wave is about this far out of tune in Chromium
+    if (active_audio_interface===1)
+        frequency_fudge_factor = rat.fromDecimal(1.4465);
+
+    // with a different factor in Firefox?!
+    if (active_audio_interface===2)
+        frequency_fudge_factor = rat.fromDecimal(3.155);
+        //frequency_fudge_factor = rat.clone(rat.PI); // close to pi...
+
+    //console.log('fudge factor: '+rat.toDecimal(frequency_fudge_factor));
+
+}
+
+window.onload = init;
+
+var active_audio_interface;
+
+function try_webkit_audio() {
+    if (typeof AudioContext !== "undefined") {
+        audio_context = new AudioContext();
+    } else if (typeof webkitAudioContext !== "undefined") {
+        audio_context = new webkitAudioContext();
+    } else {
+        return try_mozilla_audio();
+    }
+    active_audio_interface = 1;
+
+    // move to tracks?
+    jsProcessor = audio_context.createScriptProcessor(Math.pow(2, buffer_size), 0, 1);
+    //jsProcessor.onaudioprocess = process;
+    jsProcessor.onaudioprocess = audioFillEventBuffer;
+    //jsProcessor.connect(audio_context.destination);
+
+    gainNode = audio_context.createGain();
+    jsProcessor.connect(gainNode);
+    gainNode.connect(audio_context.destination);
+    gainNode.gain.value = 1;
+}
+
+function try_mozilla_audio() {
+    //sample_rate = 11025;
+    //buffer_size = 12;
+    this.data_destination = new AudioDataDestination(sample_rate, tracks[0]);
+    active_audio_interface = 2;
+    gainNode =  { gain: { value: 1 } };
+}
+
+var last_p;
+
+var temp_freq = rat.create();
+
+function updateFrequency(p) {
+    if (p < 0) p = 0;
+    if (p === last_p) return;
+    last_p = p = Math.floor( p * x_modifier );
+
+    var scale_length = selected_scale.length + 1;
+
+    var note = p % scale_length - 1;
+
+    var octave =
+        p < scale_length
+        ? 0
+        : Math.floor( p / scale_length);
+
+    rat.scalar_multiply(temp_freq, base_frequency, Math.pow(2, octave));
+    if (note >= 0)
+        rat.mul(temp_freq, temp_freq, mat2_toRational(Rational_Notes[selected_scale[note]]));
+    tracks[0].setFrequency( temp_freq );
+
+    if (!show_details) return;
+
+    document.getElementById('viewport').innerHTML = 'wave type: '+wave_type;
+
+    /*
+    document.getElementById('viewport').innerHTML += '<br>scale:';
+    for (var i=0; i<scale_length-1; i++)
+        document.getElementById('viewport').innerHTML += ' ['+selected_scale[i]+']';
+    */
+
+    document.getElementById('viewport').innerHTML += '<br>scale notes:';
+
+    document.getElementById('viewport').innerHTML +=
+        note===-1
+        ? ' <b>[1]</b>'
+        : ' [1]';
+
+    for (var i=0; i<scale_length-1; i++)
+        document.getElementById('viewport').innerHTML +=
+        note===i
+        ? ' <b>['+rat.str(mat2_toRational(Rational_Notes[selected_scale[i]]))+']</b>'
+        : ' ['+rat.str(mat2_toRational(Rational_Notes[selected_scale[i]]))+']';
+
+    document.getElementById('viewport').innerHTML += '<br>base frequency: ' + rat.toDecimal(base_frequency);
+
+    //document.getElementById('viewport').innerHTML += ' (' + rat.str(base_frequency) + ')';
+
+    document.getElementById('viewport').innerHTML += '<br>octave: ' + octave;
+
+    document.getElementById('viewport').innerHTML += '<br>note: ' + (note + 1);
+
+    document.getElementById('viewport').innerHTML += '<br>note ratio: ' + rat.str(rat.divide(rat.create(), tracks[0].frequency, base_frequency));
+
+    document.getElementById('viewport').innerHTML += '<br>current frequency: ' + rat.toDecimal(tracks[0].frequency);
+
+    //document.getElementById('viewport').innerHTML += ' (' + rat.str(tracks[0].frequency) + ')';
+
+}
+
+
+/* TOGGLEABLES */
+
+var melodic_minor_is_enabled = false;
+var show_details = true;
+var show_help = false;
+
+
+
+/* KEYBOARD */
+
+window.onkeydown = function(e) {
+    melodic_minor_is_enabled = false;
+    var k = (e?e:event).which;
+    switch (k) {
+
+        case 27: // esc
+        case 18: // alt
+        case 48: // 0
+            wave_type = 0;
+            break;
+
+        case 49: // 1
+        case 32: // space
+            wave_type = WAVE_SINE;
+            break;
+
+        case 50: // 2
+        case 17: // ctrl
+            wave_type = WAVE_SQUARE;
+            break;
+
+        case 51: // 3
+        case 16: // shift
+            wave_type = WAVE_SAWTOOTH;
+            break;
+
+        case 52: // 4
+            wave_type = WAVE_SHARKTOOTH;
+            break;
+
+        case 53: // 5
+            wave_type = WAVE_STEPS;
+            break;
+
+        case 54: // 6
+            wave_type = WAVE_ZAP;
+            break;
+
+        case 57: // 9
+        case 8: // bksp
+            wave_type = WAVE_NOISE;
+            break;
+
+        case 66: // b
+            selected_scale = Scale_Blues;
+            break;
+
+        case 67: // c
+            selected_scale = Scale_Chromatic;
+            break;
+
+        case 79: // o
+            selected_scale = Scale_Octave;
+            break;
+
+        case 77: // m
+            selected_scale = Scale_Major;
+            break;
+
+        case 78: // n
+            selected_scale = Scale_Minor_Natural;
+            break;
+
+        case 188: // ,
+            selected_scale = Scale_Major_Pentatonic;
+            break;
+
+        case 76: // l
+            selected_scale = Scale_Minor_Pentatonic;
+            break;
+
+        case 82: // r
+            selected_scale = Scale_Minor_Harmonic;
+            break;
+
+        case 73: // i
+            selected_scale = Scale_Wicked;
+            break;
+
+        case 80: // p
+            selected_scale = Scale_Phrygian;
+            break;
+
+        case 90: // z
+            selected_scale = Scale_Dorian;
+            break;
+
+        case 88: // x
+            selected_scale = Scale_Mixolydian;
+            break;
+
+        case 89: // y
+            selected_scale = Scale_Lydian;
+            break;
+
+        case 85: // u
+            selected_scale = Scale_Locrian;
+            break;
+
+        case 65: // a
+            selected_scale = Scale_Minor_Melodic_Ascending;
+            break;
+
+        case 83: // s
+            selected_scale = Scale_Minor_Melodic_Ascending;
+            melodic_minor_is_enabled = true;
+            break;
+
+        case 68: // d
+            selected_scale = Scale_Minor_Melodic_Descending;
+            break;
+
+        case 38: // up
+            rat.div(base_frequency, base_frequency, rat.fromValues(5, 6));
+            break;
+        case 40: // down
+            rat.mul(base_frequency, base_frequency, rat.fromValues(5, 6));
+            break;
+        case 39: // right
+            rat.div(base_frequency, base_frequency, rat.fromValues(100, 101));
+            break;
+        case 37: // left
+            rat.mul(base_frequency, base_frequency, rat.fromValues(100, 101));
+            break;
+
+        // -
+        case 173: // -
+        case 109: // -
+        case 189: // -
+            rat.scalar_divide(base_frequency, base_frequency, 2);
+            break;
+
+        // +
+        case 61: // =
+        case 107: // +
+        case 187: // +
+            rat.scalar_multiply(base_frequency, base_frequency, 2);
+            break;
+
+        case 219: // [
+            rat.sub(base_frequency, base_frequency, tweak_interval);
+            break;
+        case 221: // ]
+            rat.add(base_frequency, base_frequency, tweak_interval);
+            break;
+
+        case 186: // ;
+        case 59: // ;
+            rat.sub(base_frequency, base_frequency, rat.scalar_multiply(rat.create(), tweak_interval, 100));
+            break;
+        case 222: // '
+            rat.add(base_frequency, base_frequency, rat.scalar_multiply(rat.create(), tweak_interval, 100));
+            break;
+
+        case 190: // .
+            rat.sub(base_frequency, base_frequency, rat.scalar_multiply(rat.create(), tweak_interval, 1000));
+            break;
+        case 191: // /
+            rat.add(base_frequency, base_frequency, rat.scalar_multiply(rat.create(), tweak_interval, 1000));
+            break;
+
+        case 72: // h
+            if (show_help) {
+                show_help = false;
+                document.getElementById('help').style.display='none';
+
+            }
+            else {
+                show_help = true;
+                document.getElementById('help').style.display='block';
+            }
+            break;
+
+        case 192: // `
+            if (show_details) {
+                show_details = false;
+                document.getElementById('viewport').style.display='none';
+
+            }
+            else {
+                show_details = true;
+                document.getElementById('viewport').style.display='block';
+            }
+            break;
+
+        case 13: // enter
+            base_frequency = rat.fromInteger(rat.round(base_frequency));
+            break;
+
+        default:
+            document.getElementById('viewport').innerHTML += '<br>k = '+k;
+            return;
+    }
+
+    last_p = null;
+    updateFrequency(mouse_x);
+};
+
+window.onkeyup = function(e) {
+    var k = (e?e:event).which;
+    switch (k) {
+
+        case 16: // shift
+        case 17: // ctrl
+        case 32: // space
+        case 8: // bksp
+            wave_type = 0;
+            last_p = null;
+            updateFrequency(mouse_x);
+            break;
+
+    }
+
+    //wave_type = 0;
+}
+
+
+
+/* MOUSE */
+
+var mouse_x = 0, mouse_y = 0;
+
+function updateMouse(x, y) {
+    if (melodic_minor_is_enabled) {
+        if (x >= mouse_x)
+            selected_scale = Scale_Minor_Melodic_Ascending;
+        else
+            selected_scale = Scale_Minor_Melodic_Descending;
+    }
+
+    if (x !== mouse_x)
+        updateFrequency(x);
+
+    if (y !== mouse_y) {
+        //gainNode.gain.value = (window.innerHeight / 2 - y) / window.innerHeight + .5;
+        gainNode.gain.value = (window.innerHeight - y) / window.innerHeight;
+        //base_frequency.plus(tweak_interval.times(mouse_y - y));
+    }
+
+    /*
+    if (mouse_y !== y)
+        base_frequency = base_frequency.plus( rat.fromValues(mouse_y - y, 256) );
+    */
+
+    mouse_x = x;
+    mouse_y = y;
+}
+
+window.onmousedown = function(e) {
+    wave_type = e.button + 1;
+    /*
+    switch (e.button) {
+
+        case 0: // l
+            wave_type = WAVE_SINE;
+            break;
+
+        case 1: // m
+            wave_type = WAVE_SQUARE;
+            break;
+
+        case 2: // r
+            wave_type = WAVE_SAWTOOTH;
+            break;
+
+        default: // ?
+            wave_type = e.button;
+            break;
+
+    }
+    */
+    updateFrequency( Math.floor( mouse_x * x_modifier ) );
+};
+
+window.onmouseup = function() {
+    wave_type = 0;
+};
+
+</script>
+
+</head>
+<body style="background:url(img/mouse_keys.png);-webkit-user-select:none;user-select:none;">
+<div id="help" style="padding:10px;margin:30px;background:rgba(255, 255, 255, .8);display:none;">
+<h2>Scales</h2>
+<ul>
+    <li>
+        <strong>b</strong> blues
+    </li>
+    <li>
+        <strong>m</strong> major
+    </li>
+    <li>
+        <strong>n</strong> natural minor
+    </li>
+    <li>
+        <strong>r</strong> harmonic minor
+    </li>
+    <li>
+        <strong>a / s / d</strong> melodic minor (ascending / auto / descending)
+    </li>
+    <li>
+        <strong>c</strong> chromatic
+    </li>
+    <li>
+        <strong>,</strong> major pentatonic
+    </li>
+</ul>
+<h2>Waves</h2>
+<ul>
+    <li>
+        <strong>1 / space / lmb</strong> sineless sine wave
+    </li>
+    <li>
+        <strong>2 / shift / mmb</strong> square sine wave
+    </li>
+    <li>
+        <strong>3 / ctrl / rmb</strong> sawtooth wave
+    </li>
+    <li>
+        <strong>...</strong>?
+    </li>
+</ul>
+<h2>Tuning</h2>
+<ul>
+    <li>
+        <strong>+ -</strong> adjust base frequency by a factor of 2
+    </li>
+    <li>
+        <strong>[ ] ; ' . /</strong> adjust base frequency by 1/1000, 1/50, or 1
+    </li>
+    <li>
+    <strong>arrows</strong> adjust base frequency in the ratio of 10/11 or 10/101
+    </li>
+    <li>
+    <strong>enter</strong> round base frequency to the nearest integer
+    </li>
+</ul>
+<h2>GUI</h2>
+<ul>
+    <li>
+        <strong>h</strong> toggle this help
+    </li>
+    <li>
+        <strong>~</strong> toggle note info
+    </li>
+    <li>
+        <strong>zoom in/out</strong> change width of keys
+    </li>
+</ul>
+</div>
+<div id="viewport" style="padding:10px;margin:30px;background:rgba(255, 255, 255, .8);"></div>
+</body>
+</html>
