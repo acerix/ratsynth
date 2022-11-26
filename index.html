@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>rational sound synthesizer</title>
-<script>var RAT_ARRAY_TYPE = Float32Array;</script>
+<script>const RAT_ARRAY_TYPE = Float32Array;</script>
 <script src="https://acerix.github.io/rational.js/releases/rationaljs.alpha.js"></script>
 <script src="js/scale.js"></script>
 <script>
@@ -103,8 +103,6 @@ function init() {
 
 }
 
-window.onload = init;
-
 var active_audio_interface;
 
 function try_webkit_audio() {
@@ -158,6 +156,11 @@ function updateFrequency(p) {
     rat.scalar_multiply(temp_freq, base_frequency, Math.pow(2, octave));
     if (note >= 0)
         rat.mul(temp_freq, temp_freq, mat2_toRational(Rational_Notes[selected_scale[note]]));
+
+
+    // skip if not initilized
+    if (tracks.length < 1) return;
+
     tracks[0].setFrequency( temp_freq );
 
     if (!show_details) return;
@@ -433,12 +436,16 @@ window.onkeyup = function(e) {
 var mouse_x = 0, mouse_y = 0;
 
 function updateMouse(x, y) {
+
     if (melodic_minor_is_enabled) {
         if (x >= mouse_x)
             selected_scale = Scale_Minor_Melodic_Ascending;
         else
             selected_scale = Scale_Minor_Melodic_Descending;
     }
+
+    // skip if not initilized
+    if (tracks.length < 1) return;
 
     if (x !== mouse_x)
         updateFrequency(x);
@@ -492,6 +499,7 @@ window.onmouseup = function() {
 
 </head>
 <body style="background:url(img/mouse_keys.png);-webkit-user-select:none;user-select:none;">
+<button id="start" onclick="init();this.remove();">Start</button>
 <div id="help" style="padding:10px;margin:30px;background:rgba(255, 255, 255, .8);display:none;">
 <h2>Scales</h2>
 <ul>
